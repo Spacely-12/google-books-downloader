@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "C:\Users\Salawudeen\Desktop\bookdwonloadeer\google-books-downloader\gbd.py", line 118, in <module>
+    download_images(selected_pages, os.path.join(download_dir, book_data))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Salawudeen\Desktop\bookdwonloadeer\google-books-downloader\gbd.py", line 85, in download_images
+    urllib.request.urlretrieve(url, filepath)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\urllib\request.py", line 214, in urlretrieve
+    with contextlib.closing(urlopen(url, data)) as fp:
+                            ~~~~~~~^^^^^^^^^^^
+  File "C:\Python313\Lib\urllib\request.py", line 189, in urlopen
+    return opener.open(url, data, timeout)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\urllib\request.py", line 473, in open
+    req = Request(fullurl, data)
+  File "C:\Python313\Lib\urllib\request.py", line 292, in __init__
+    self.full_url = url
+    ^^^^^^^^^^^^^
+  File "C:\Python313\Lib\urllib\request.py", line 318, in full_url
+    self._parse()
+    ~~~~~~~~~~~^^
+  File "C:\Python313\Lib\urllib\request.py", line 347, in _parse
+    raise ValueError("unknown url type: %r" % self.full_url)
+ValueError: unknown url type: '8'
