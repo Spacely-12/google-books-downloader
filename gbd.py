@@ -1,11 +1,17 @@
 import os
-import urllib.request
-import traceback
 import re
+import traceback
 import validators
 from time import sleep
 from tqdm import tqdm
 import requests
+import logging
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+
+from PIL import Image
+import requests
+from io import BytesIO
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,26 +20,39 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
 
+# Setup logging
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(console_handler)
+
+
 def setup_driver(chromedriver_path):
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run headless Chrome
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.binary_location = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"  # Replace with your actual Chrome path
+    chrome_options.binary_location = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    logging.info("Initializing WebDriver...")
     return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
 
 
 def get_book_url():
     while True:
-        url = input("\nStep 1: Paste the URL of the book preview to be downloaded:\nYour input: ")
-        match = re.search(r"id=[A-Za-z0-9]+", url)
-        if match:
-            id_part = match.group(0)
-            return (
-                f"https://books.google.com/books?{id_part}&pg=1&hl=en#v=onepage&q&f=false",
-                f"https://books.google.com/books?{id_part}&pg=1&hl=en&f=false&output=embed&source=gbs_embed"
-            )
-        print("Invalid input. Please try again.")
+        url = input("\nStep 1: Paste the URL of the book preview to be downloaded:\nYour input: ").strip()
+        if validators.url(url):
+            match = re.search(r"id=[A-Za-z0-9]+", url)
+            if match:
+                id_part = match.group(0)
+                return (
+                    f"https://books.google.com/books?{id_part}&pg=1&hl=en#v=onepage&q&f=false",
+                    f"https://books.google.com/books?{id_part}&pg=1&hl=en&f=false&output=embed&source=gbs_embed"
+                )
+        logging.warning("Invalid URL. Please try again.")
 
 
 def get_book_data(driver, url):
@@ -44,7 +63,7 @@ def get_book_data(driver, url):
         author = driver.find_element(By.CLASS_NAME, "addmd").text
         return f"{title} by {author}"
     except Exception:
-        print("Failed to extract book data. Ensure the URL is valid.")
+        logging.error("Failed to extract book data. Ensure the URL is valid.")
         return "Unknown Book"
 
 
@@ -58,7 +77,7 @@ def scroll_and_capture(driver):
                 break
             checkpoint = page_display
             page_display.click()
-            for _ in range(25):  # Scroll 25 pages
+            for _ in range(25):
                 driver.find_element(By.TAG_NAME, "body").send_keys(Keys.SPACE)
             sleep(2)
         except Exception:
@@ -67,40 +86,53 @@ def scroll_and_capture(driver):
 
 
 def extract_urls(page_source):
-    """
-    Takes driver's page source as an input,
-    returns a `dict` of page image URLs.
-    """
     urls = re.findall(r"https:\/\/[^']+content[^']+pg=[A-Z\d]+[^']+", page_source)
-    print("Extracted URLs:", urls)
+    logging.info(f"Extracted {len(urls)} URLs from page source.")
     return {page: url for page, url in zip(range(1, len(urls) + 1), urls)}
 
 
 def save_backup(urls):
-    save = input("Would you like to save a backup of the URLs? (yes/no): ").strip().lower()
-    if save == "yes":
-        with open("backup.txt", "w") as f:
-            f.write(str(urls))
-        print("Backup saved.")
-    else:
-        print("Backup not saved.")
+    with open("backup.txt", "w") as f:
+        f.write(str(urls))
+    logging.info("Backup of URLs saved to backup.txt.")
 
 
-def download_images(pages, directory):
+
+def download_image(page, url, directory):
+    filepath = os.path.join(directory, f"page{page}.jpg")  # Change file extension to .jpg
+    if not validators.url(url):
+        logging.warning(f"Invalid URL skipped: {url}")
+        return False
+    try:
+        response = requests.get(url)
+        if response.status_code != 200:
+            logging.warning(f"URL not accessible: {url}")
+            return False
+        
+        # Open the image and convert it to RGB if necessary (for saving as JPEG)
+        img = Image.open(BytesIO(response.content))
+        img = img.convert("RGB")  # Convert to RGB mode if it's in another format (e.g., RGBA or PNG)
+        
+        # Save the image as JPEG
+        img.save(filepath, "JPEG")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to download {url}: {e}")
+        return False
+
+
+
+def download_images_concurrently(pages, directory, max_threads=5):
     os.makedirs(directory, exist_ok=True)
-    for page, url in tqdm(pages.items(), desc="Downloading images"):
-        if not validators.url(url):
-            print(f"Invalid URL skipped: {url}")
-            continue
-        try:
-            response = requests.head(url)
-            if response.status_code != 200:
-                print(f"URL not accessible: {url}")
-                continue
-            filepath = os.path.join(directory, f"page{page}.png")
-            urllib.request.urlretrieve(url, filepath)
-        except Exception as e:
-            print(f"Failed to download {url}: {e}")
+    with ThreadPoolExecutor(max_threads) as executor:
+        results = list(tqdm(
+            executor.map(lambda item: download_image(item[0], item[1], directory), pages.items()),
+            total=len(pages),
+            desc="Downloading images"
+        ))
+    successful_downloads = sum(results)
+    logging.info(f"Downloaded {successful_downloads}/{len(pages)} images.")
+    return successful_downloads
 
 
 def select_pages(selection, all_pages):
@@ -118,18 +150,21 @@ def select_pages(selection, all_pages):
             pages = map(int, selection.split(','))
             return {page: url for page, url in all_pages.items() if page in pages}
     except Exception:
-        print("Invalid selection. Defaulting to all pages.")
+        logging.warning("Invalid selection. Defaulting to all pages.")
         return all_pages
 
 
 if __name__ == "__main__":
-    chromedriver_path = os.getenv('CHROMEDRIVER_PATH', "C:/Users/Salawudeen/Desktop/bookdwonloadeer/google-books-downloader/chromedriver.exe")
-    driver = setup_driver(chromedriver_path)
+    parser = argparse.ArgumentParser(description="Google Books Downloader")
+    parser.add_argument("--chromedriver", default="chromedriver.exe", help="Path to ChromeDriver")
+    args = parser.parse_args()
+
+    driver = setup_driver(args.chromedriver)
 
     try:
         data_url, pages_url = get_book_url()
         book_data = get_book_data(driver, data_url)
-        print(f"Processing book: {book_data}")
+        logging.info(f"Processing book: {book_data}")
 
         page_source = scroll_and_capture(driver)
         all_pages = extract_urls(page_source)
@@ -139,12 +174,10 @@ if __name__ == "__main__":
         selected_pages = select_pages(selection, all_pages)
 
         download_dir = input("Enter the directory to save images (leave blank for current directory): ") or "."
-        download_images(selected_pages, os.path.join(download_dir, book_data))
+        successful_downloads = download_images_concurrently(selected_pages, os.path.join(download_dir, book_data))
 
-        print(f"Successfully downloaded {len(selected_pages)} pages.")
+        logging.info(f"Successfully downloaded {successful_downloads} pages.")
     except Exception as e:
-        with open("error.log", "w") as log:
-            log.write(traceback.format_exc())
-        print(f"An error occurred. Details logged in error.log: {e}")
+        logging.error("An error occurred.", exc_info=True)
     finally:
         driver.quit()
